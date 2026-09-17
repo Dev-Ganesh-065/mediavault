@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError, CancelledError, getAsset, thumbnailUrl, updateAsset } from '@/api/client';
 import { formatBytes, formatDate, formatDuration, statusLabel } from '@/lib/format';
 import type { Asset, AssetStatus } from '@/lib/types';
@@ -30,34 +31,52 @@ export interface AssetDetailProps {
  * click re-applies the same status against the fresh version.
  */
 export function AssetDetail({ id, onSaved, onOptimistic, onRevert, onClose }: AssetDetailProps) {
-  const [asset, setAsset] = useState<Asset | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [reload, setReload] = useState(0);
   const panelRef = useRef<HTMLElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
-  const assetRef = useRef<Asset | null>(null);
-  assetRef.current = asset;
 
-  useEffect(() => {
-    const controller = new AbortController();
-    setAsset(null);
-    setLoadError(null);
-    setSaveError(null);
-    setConflict(false);
-    getAsset(id, controller.signal)
-      .then((a) => {
-        setAsset(a);
-        assetRef.current = a;
-      })
-      .catch((err: unknown) => {
-        if (err instanceof CancelledError) return;
-        setLoadError(err instanceof Error ? err.message : 'Could not load this asset.');
-      });
-    return () => controller.abort();
-  }, [id, reload]);
+  /**
+   * The panel reads from the cache rather than keeping a copy of its own: one
+   * cache entry per asset, so re-opening a panel you just looked at renders
+   * instantly, and the row the grid shows and the row the panel shows cannot
+   * disagree.
+   */
+  const assetQuery = useQuery({
+    queryKey: ['asset', id],
+    queryFn: ({ signal }) => getAsset(id, signal),
+  });
+
+  const asset = assetQuery.data ?? null;
+  const loadError = assetQuery.error
+    ? assetQuery.error instanceof Error
+      ? assetQuery.error.message
+      : 'Could not load this asset.'
+    : null;
+
+  /**
+   * Saving is a *mutation*: it never runs on mount, caches no response of its
+   * own, and exists to produce a server-confirmed asset which we then write
+   * into the cache — the grid row first, then the list is invalidated so that
+   * a row which no longer matches the active filter disappears in the
+   * background.
+   *
+   * `mutateAsync` rather than `mutate`, because a 409 has to be told apart
+   * from every other failure and handled on the spot; `mutate`'s callbacks
+   * only fire for the last call.
+   */
+  const saveMutation = useMutation({
+    mutationFn: (patch: { id: string; version: number; status: AssetStatus }) =>
+      updateAsset(patch.id, patch.version, { status: patch.status }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(['asset', updated.id], updated);
+      onSaved(updated);
+      void queryClient.invalidateQueries({ queryKey: ['assets'] });
+    },
+  });
+
+  const saving = saveMutation.isPending;
 
   // Focus moves into the panel when it opens.
   useEffect(() => {
@@ -72,20 +91,19 @@ export function AssetDetail({ id, onSaved, onOptimistic, onRevert, onClose }: As
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
-async function setStatus(next: AssetStatus) {
-    const current = assetRef.current;
+  async function setStatus(next: AssetStatus) {
+    const current = assetQuery.data;
     if (!current || saving) return;
+    // `current` from this render is the snapshot to roll back to: the cache
+    // still holds it, and the grid row can be restored from it verbatim.
     const snapshot = current;
-    setSaving(true);
     setSaveError(null);
     setConflict(false);
+    // Optimistic: the grid shows the target state before the server confirms.
     onOptimistic(current.id, next);
 
     try {
-      const updated = await updateAsset(current.id, current.version, { status: next });
-      setAsset(updated);
-      assetRef.current = updated;
-      onSaved(updated);
+      await saveMutation.mutateAsync({ id: current.id, version: current.version, status: next });
     } catch (err) {
       if (err instanceof CancelledError) return;
       if (err instanceof ApiError && err.status === 409) {
@@ -94,15 +112,11 @@ async function setStatus(next: AssetStatus) {
         onRevert(current.id, snapshot);
         setConflict(true);
         setSaveError('Someone else changed this asset while you were editing it.');
-        setReload((r) => r + 1); // refetch the current version
+        void assetQuery.refetch(); // pull the version they saved
         return;
       }
       onRevert(current.id, snapshot);
-      setAsset(snapshot);
-      assetRef.current = snapshot;
       setSaveError(err instanceof Error ? err.message : 'The change did not save. Try again.');
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -128,7 +142,7 @@ async function setStatus(next: AssetStatus) {
       {loadError && (
         <div className="alert alert--error" role="alert">
           <p>{loadError}</p>
-          <button className="btn" onClick={() => setReload((r) => r + 1)}>
+          <button className="btn" onClick={() => void assetQuery.refetch()}>
             Try again
           </button>
         </div>
