@@ -46,6 +46,7 @@ export function AssetDetail({ id, onSaved, onOptimistic, onRevert, onClose }: As
   const assetQuery = useQuery({
     queryKey: ['asset', id],
     queryFn: ({ signal }) => getAsset(id, signal),
+    staleTime: 5 * 60 * 1000
   });
 
   const asset = assetQuery.data ?? null;

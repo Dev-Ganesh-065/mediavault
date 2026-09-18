@@ -97,6 +97,7 @@ function Thumb({ asset }: { asset: Asset }) {
       src={thumbnailUrl(asset.id)}
       alt=""
       loading="lazy"
+      decoding="async"
       draggable={false}
       onError={(e) => {
         // A 404 thumbnail (or any image failure) degrades to a stable
