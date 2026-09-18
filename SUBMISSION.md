@@ -34,6 +34,15 @@ Found in the baseline `src/` code. Each marked **fixed**, **knowingly left**, or
 | 20 | Live announcements on every keystroke would spam screen readers | — | **fixed** — single polite live region fed by curated announcements |
 | 21 | Sorting UI existed but was not wired to the API's `sort` values correctly | — | **fixed** — all six `sort` values wired through |
 
+A second QA pass over the upgraded build surfaced four more defects, each reproduced with a headless-browser script before fixing and re-run after:
+
+| # | Defect | Where | Status |
+|---|---|---|---|
+| 22 | React 18 StrictMode's dev-only double-mount aborted the first in-flight fetch — every initial API request failed (`net::ERR_ABORTED`) and succeeded only when the remount immediately re-issued it | `main.tsx` | **fixed** — StrictMode removed; the initial fetch runs exactly once, and cancellation for real key changes still works via the query signal |
+| 23 | Clicking a card opened the detail only from its bare padding: an `e.target === e.currentTarget` guard swallowed every click that landed on a child (thumbnail, name, meta, status pill), leaving Enter as the only reliable way in | `AssetCard.tsx` | **fixed** — any click that reaches the card opens it; the selection checkbox keeps its own `stopPropagation` so it still only toggles selection |
+| 24 | With the detail panel open, switching to another asset carried the previous asset's save-error/conflict banners onto the new one | `AssetDetail.tsx` | **fixed** — per-asset UI state resets when the active id changes; the panel itself re-queries through the `['asset', id]` cache key, so the body, facts and status picker always reflect the open asset |
+| 25 | The first arrow-key move after clicking a card jumped a row up or down: the roving tabindex ignored focus landing on cards (mouse clicks, focus-return when the panel closes) and the next key moved relative to a stale index | `VirtualGrid.tsx` | **fixed** — `onFocusIn` syncs the roving index with real DOM focus, so arrows always move relative to the card the user is actually on; the shift-range anchor is deliberately untouched |
+
 **Knowingly left / out of scope:**
 
 - **Offline write queueing** (bonus): skipped. Detection, pausing and recovery are done; queueing writes offline was judged lower value than polish elsewhere for the time budget.
@@ -115,6 +124,7 @@ I chose these libraries over more hand-rolled code because both replace code I w
 ## Task 5 — Keyboard and screen reader
 
 - **Roving tabindex:** exactly one tab stop; arrows/shift-arrows/Space/Enter/Home/End/PageUp/PageDown/Ctrl+A all handled; focus is clamped when the result set shrinks so it never lands on a detached node. Because the grid is virtualised, a long jump (End, PageDown) first asks the virtualizer to scroll the target into range and then waits up to two frames for that card to mount before focusing it — keyboard focus never lands on nothing.
+- **Pointer/keyboard parity:** a card opens from a click anywhere on it (the selection checkbox keeps its own `stopPropagation`), and the roving tabindex follows real DOM focus — so the first arrow key after a click moves from the card that was clicked, not from a stale index (defect #25).
 - **Detail panel:** focus moves into it on open, Escape closes, focus returns to the originating card.
 - **Live region:** one polite, atomic `role="status"` region; announcements are curated (result counts, bulk outcomes, errors) — not one per keystroke.
 - **Semantics:** `role="grid"` with `aria-rowcount`/`aria-colcount`, cards as `gridcell`s, selection via `aria-selected`, checkboxes with accessible names, decorative thumbnails `aria-hidden`.
@@ -146,4 +156,6 @@ I chose these libraries over more hand-rolled code because both replace code I w
 ## Clean-clone check
 
 `npm install && npm run dev` was verified from a fresh clone of this repo with chaos on: health endpoint reports `{ ok: true, assets: 12400, chaos: true, latency: true }`, and the app renders, searches, paginates and bulk-edits correctly against it.
+
+**Final pre-submission verification** (on the exact tree being submitted): `npm run typecheck` and `npm run build` both pass, and the full smoke script passes with zero page errors — initial list request succeeds on the first call (no aborted duplicate), the DOM stays bounded with 400+ rows loaded, lanes measure one width / one pitch / zero overlaps, a six-character search costs 1 read and a repeat costs 0, the keyboard path (arrows, Space, Enter, Escape, focus return, Ctrl+A) and the bulk partial-failure + undo flow all behave.
 

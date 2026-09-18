@@ -84,6 +84,15 @@ export function AssetDetail({ id, onSaved, onOptimistic, onRevert, onClose }: As
     return () => window.clearTimeout(t);
   }, []);
 
+  // The panel is kept mounted while the active asset changes (clicking another
+  // card with the drawer open swaps `id` in place), so its per-asset UI state
+  // must not carry over: a save error or conflict banner raised for the
+  // previous asset would otherwise stay stuck over the new one.
+  useEffect(() => {
+    setSaveError(null);
+    setConflict(false);
+  }, [id]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();

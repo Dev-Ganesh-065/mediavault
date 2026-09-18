@@ -126,11 +126,30 @@ export function VirtualGrid({
   // Roving tabindex: when the grid container itself receives focus (Tab in),
   // hand focus to the focused card; arrow keys are handled on the container.
   function onFocusIn(e: React.FocusEvent<HTMLDivElement>) {
-    if (e.target !== scrollRef.current) return;
-    const card = scrollRef.current?.querySelector(
-      `[data-index="${focusRef.current}"]`,
-    ) as HTMLElement | null;
-    card?.focus();
+    const target = e.target as HTMLElement;
+    if (target === scrollRef.current) {
+      const card = scrollRef.current?.querySelector(
+        `[data-index="${focusRef.current}"]`,
+      ) as HTMLElement | null;
+      card?.focus();
+      return;
+    }
+    // A card gained focus by a path this grid did not initiate — a mouse
+    // click (cards are focusable), or App returning focus to the originating
+    // card when the detail panel closes. The roving index must follow real
+    // DOM focus: otherwise the next arrow key moves relative to a stale
+    // index and ArrowRight can land a row up or down. (Focus moves this grid
+    // initiates land on the same index moveTo already recorded, so this is a
+    // no-op for them — and `anchorRef` is deliberately left alone here, both
+    // because clicks set it via `onAnchor` and because shift-range moves
+    // would otherwise drag the anchor with them.)
+    const raw = target.getAttribute('data-index');
+    if (raw === null) return;
+    const idx = Number(raw);
+    if (Number.isInteger(idx) && idx !== focusRef.current) {
+      focusRef.current = idx;
+      setFocusIndex(idx);
+    }
   }
 
   /**
