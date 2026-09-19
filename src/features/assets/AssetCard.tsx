@@ -39,10 +39,17 @@ export const AssetCard = memoByKey(
       onClick={(e) => {
         if (e.shiftKey) {
           onExtendRange(index);
-        } else if (e.target === e.currentTarget) {
-          onAnchor(index);
-          onOpen(asset.id);
+          return;
         }
+        // Any click that reaches the card opens it — on the thumbnail, the
+        // name, the meta row, the status pill or the bare padding. The
+        // selection checkbox stops propagation for its own clicks, so it is
+        // the one child that must not bubble here; everything else should.
+        // (A previous `e.target === e.currentTarget` check swallowed every
+        // click that landed on a child element, leaving Enter as the only
+        // way to open a card.)
+        onAnchor(index);
+        onOpen(asset.id);
       }}
     >
       <Thumb asset={asset} />
@@ -90,6 +97,7 @@ function Thumb({ asset }: { asset: Asset }) {
       src={thumbnailUrl(asset.id)}
       alt=""
       loading="lazy"
+      decoding="async"
       draggable={false}
       onError={(e) => {
         // A 404 thumbnail (or any image failure) degrades to a stable

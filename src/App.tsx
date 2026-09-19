@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ApiError, bulkSetStatus, runChunked } from '@/api/client';
 import { AssetDetail } from '@/features/assets/AssetDetail';
 import { BulkBar } from '@/features/assets/BulkBar';
@@ -21,14 +22,18 @@ const SORTS: Array<{ value: AssetSort; label: string }> = [
 ];
 
 /**
- * 250 ms. Ordinary typing arrives faster than that (peaks of ~10 keystrokes
- * or more per burst), and everything after the burst is a duplicate of the
- * last keystroke's query — the API answers "name contains X", not "was this
- * the 4th or 5th character". 250 ms keeps search feeling instant and bounds
- * typing to ≤ ~4 reads/sec, well inside the 80/10s budget so pagination and
- * retries keep a reserve.
+ * 400 ms.
+ *
+ * Ordinary typing arrives faster than that (bursts of ten keystrokes or more),
+ * and everything after the burst is a duplicate of the last keystroke's query —
+ * the API answers "name contains X", not "was this the 4th or 5th character".
+ * 250 ms sat inside the 80-requests-per-10s budget but still let a single
+ * six-character word fire two or three reads; at 400 ms a whole burst collapses
+ * into one request. Typing still feels immediate, and — now that results are
+ * cached — a search you have already run renders from cache the moment the
+ * debounce lands, with any refresh happening in the background.
  */
-const SEARCH_DEBOUNCE_MS = 250;
+const SEARCH_DEBOUNCE_MS = 400;
 const CONCURRENCY = 3;
 const BULK_CHUNK = 50;
 
@@ -73,6 +78,13 @@ interface BulkRun {
   /** id -> status before the last bulk run, so rollback/undo can restore it. */
   prev: Record<string, AssetStatus>;
 }
+
+/** What one chunked bulk pass hands back to its caller. */
+interface BulkRunResult {
+  outcome: BulkOutcome;
+  /** Rows the server confirmed, so successes can be written back verbatim. */
+  confirmed: Map<string, Asset>;
+}
 export function App() {
   const { query, setFilter, setSearchTerm } = useUrlQuery();
   const online = useOffline();
@@ -89,6 +101,65 @@ export function App() {
     online,
   );
   const { applyItems } = list;
+  const queryClient = useQueryClient();
+
+  /**
+   * Bulk status changes are a *mutation*: they never run on mount, cache no
+   * response of their own, and exist to produce server-confirmed rows.
+   *
+   * The whole chunked pass is one mutation rather than one per chunk, so the
+   * completion hook fires once per user action. Invalidating after every 50-id
+   * chunk would refetch every loaded page ten times over during a 500-row bulk,
+   * which is precisely how you exhaust an 80-requests-per-10s budget.
+   *
+   * Invalidation is still how the list reconciles itself: rows already in the
+   * cache are patched from the response, and the background refetch fixes what
+   * a patch cannot express — a row that no longer matches the active filter.
+   */
+  const bulkMutation = useMutation({
+    mutationFn: async ({
+      ids,
+      status,
+    }: {
+      ids: string[];
+      status: AssetStatus;
+    }): Promise<BulkRunResult> => {
+      const confirmed = new Map<string, Asset>();
+      const okIds: string[] = [];
+      const failed: BulkOutcome['failed'] = [];
+
+      // Chunks respect the 50-id cap; at most 3 run in parallel so a 500-row
+      // selection never fires 10 parallel requests into a rate limiter.
+      await runChunked(ids, BULK_CHUNK, CONCURRENCY, async (chunk) => {
+        const res = await bulkSetStatus(chunk, status);
+        let rows = res.results;
+        const conflicts = rows.filter((r) => !r.ok && r.code === 'conflict').map((r) => r.id);
+        if (conflicts.length > 0) {
+          // ~7% random conflicts are retryable business failures; legal_hold
+          // and not_found are not, so only this subset is ever repeated.
+          const retry = await bulkSetStatus(conflicts, status);
+          rows = rows.map((r) => {
+            if (r.ok || r.code !== 'conflict') return r;
+            const rr = retry.results.find((x) => x.id === r.id);
+            return rr ?? r;
+          });
+        }
+        for (const r of rows) {
+          if (r.ok) {
+            okIds.push(r.id);
+            confirmed.set(r.id, r.asset);
+          } else {
+            failed.push({ id: r.id, code: r.code, message: r.message ?? undefined });
+          }
+        }
+      });
+
+      return { outcome: { okIds, failed }, confirmed };
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['assets'] });
+    },
+  });
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -160,66 +231,43 @@ export function App() {
     applyItems((rows) => rows.map((a) => (ids.includes(a.id) ? { ...a, status: target } : a)));
     setBulk({ phase: 'working', outcome: null, target, prev });
 
-    const okAssets = new Map<string, Asset>();
-    const okIds: string[] = [];
-    const failed: BulkOutcome['failed'] = [];
+    let confirmed = new Map<string, Asset>();
+    let outcome: BulkOutcome;
 
     try {
-      // Chunks respect the 50-id cap; at most 3 run in parallel so a 500-row
-      // selection never fires 10 parallel requests into a rate limiter.
-      await runChunked(ids, BULK_CHUNK, CONCURRENCY, async (chunk) => {
-        const res = await bulkSetStatus(chunk, target);
-        let rows = res.results;
-        const conflicts = rows.filter((r) => !r.ok && r.code === 'conflict').map((r) => r.id);
-        if (conflicts.length > 0) {
-          // ~7% random conflicts are retryable business failures; legal_hold
-          // and not_found are not, so only this subset is ever repeated.
-          const retry = await bulkSetStatus(conflicts, target);
-          rows = rows.map((r) => {
-            if (r.ok || r.code !== 'conflict') return r;
-            const rr = retry.results.find((x) => x.id === r.id);
-            return rr ?? r;
-          });
-        }
-        for (const r of rows) {
-          if (r.ok) {
-            okIds.push(r.id);
-            okAssets.set(r.id, r.asset);
-          } else {
-            failed.push({ id: r.id, code: r.code, message: r.message ?? undefined });
-          }
-        }
-      });
+      const result = await bulkMutation.mutateAsync({ ids, status: target });
+      confirmed = result.confirmed;
+      outcome = result.outcome;
     } catch (err) {
       // Whole pass failed (server unreachable / rate-limited out): rollback.
-      for (const id of ids) {
-        failed.push({ id, code: 'bad_request', message: humanError(err) });
-      }
+      outcome = {
+        okIds: [],
+        failed: ids.map((id) => ({ id, code: 'bad_request' as const, message: humanError(err) })),
+      };
     }
 
     // Keep successes (server-confirmed rows, fresh versions), roll back only
     // the failures. Selection keeps the failures for a targeted retry.
     applyItems((rows) =>
       rows.map((a) => {
-        const fresh = okAssets.get(a.id);
+        const fresh = confirmed.get(a.id);
         if (fresh) return fresh;
         if (ids.includes(a.id)) return { ...a, status: prev[a.id] ?? a.status };
         return a;
       }),
     );
 
-    const outcome: BulkOutcome = { okIds, failed };
     setBulk({ phase: 'done', outcome, target, prev });
-    setSelectedIds(new Set(failed.map((f) => f.id)));
-    if (failed.length === 0) {
-      say(`${okIds.length.toLocaleString()} assets are now ${statusLabel(target)}.`);
+    setSelectedIds(new Set(outcome.failed.map((f) => f.id)));
+    if (outcome.failed.length === 0) {
+      say(`${outcome.okIds.length.toLocaleString()} assets are now ${statusLabel(target)}.`);
     } else {
       say(
-        `${okIds.length} updated, ${failed.length} could not change` +
-        ` (${[...new Set(failed.map((f) => f.code))].join(', ')}).`,
+        `${outcome.okIds.length} updated, ${outcome.failed.length} could not change` +
+        ` (${[...new Set(outcome.failed.map((f) => f.code))].join(', ')}).`,
       );
     }
-  }, [applyItems, list.items, say]);
+  }, [applyItems, bulkMutation, say]);
 
   const applyBulkStatus = useCallback((next: AssetStatus) => {
     const ids = [...selectedIds];
@@ -287,7 +335,7 @@ export function App() {
   const onSaved = useCallback((updated: Asset) => {
     applyItems((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
   }, [applyItems]);
-const loadingInitial = list.phase === 'loading' && list.items.length === 0;
+  const loadingInitial = list.phase === 'loading' && list.items.length === 0;
 
   return (
     <div className="app">
@@ -393,7 +441,7 @@ const loadingInitial = list.phase === 'loading' && list.items.length === 0;
         onClear={clearSelection}
       />
 
-<main className="content">
+      <main className="content">
         <section className="gridwrap">
           {list.phase === 'error' && (
             <div className="state state--error" role="alert">

@@ -236,15 +236,26 @@ fieldset { border: 0; margin: 0; padding: 0; }
   scrollbar-gutter: stable;
 }
 
-.grid__spacer { position: relative; }
+/* The virtualised surface. Its height is the virtualizer's total size for the
+   rows loaded so far; every card is absolutely positioned inside it. */
+.grid__canvas { position: relative; }
 
-.grid__row {
-  position: absolute;
-  left: var(--pad);
-  right: var(--pad);
-  display: flex;
+/* One virtual item = one card. `top`/`left`/`width`/`height` are written by
+   VirtualGrid from the virtualizer's measurements and lane assignment. */
+.grid__cell { position: absolute; }
+
+/* The loading state mirrors the real grid's geometry (same 224px minimum, same
+   gap) so swapping skeletons for content is not a reflow. Without this the
+   skeletons inherit `.card { height: 100% }` and each one stretches to the full
+   height of the scroll container. */
+.grid--skeleton {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(224px, 1fr));
   gap: var(--gap);
+  padding: var(--pad);
+  align-content: start;
 }
+.grid--skeleton .card { height: 238px; }
 
 .grid__loading {
   position: sticky;
@@ -558,6 +569,11 @@ fieldset { border: 0; margin: 0; padding: 0; }
  * ---------------------------------------------------------------- */
 @media (max-width: 920px) {
   .content { flex-direction: column; }
+  /* In the column layout gridwrap must be allowed to shrink below its
+     content height, or the virtualised canvas (thousands of px) forces the
+     wrapper to grow: the grid stops scrolling internally (so infinite
+     scroll never fires) and the detail panel is pushed below the fold. */
+  .gridwrap { min-height: 0; }
   .panel {
     width: 100%;
     border-left: none;

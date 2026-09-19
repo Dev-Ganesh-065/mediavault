@@ -3,14 +3,19 @@ import type { Asset, AssetPage, AssetQuery, BulkResult } from '@/lib/types';
 /* ------------------------------------------------------------------ *
  * HTTP client.
  *
- * The baseline threw away retries, backoff, Retry-After, de-duplication
- * and cancellation. All of that policy now lives here, once, so every
- * caller gets the same behaviour:
+ * Everything that is *transport* policy lives here, once, so every caller gets
+ * the same behaviour:
  *   - retry with exponential backoff + full jitter, honouring Retry-After
  *   - never retry what must not be retried (400/409/422) — decided
  *     structurally from status + error code, never string matching
- *   - de-duplicate identical in-flight GET requests
  *   - callers cancel in-flight and *queued* work via AbortSignal
+ *
+ * Everything that is *cache* policy — de-duplicating identical in-flight
+ * reads, which response belongs to which query, refetching when data goes
+ * stale or the network comes back — lives in TanStack Query instead (see
+ * `queryClient.ts` and `useAssetList.ts`). Keeping the two apart is also what
+ * keeps retries counted once: this client owns backoff, and the QueryClient
+ * is configured with `retry: 0`.
  * ------------------------------------------------------------------ */
 
 export type ApiErrorCode =
@@ -86,8 +91,6 @@ const withJitter = (baseMs: number) => baseMs + Math.random() * baseMs;
 
 const DEFAULT_RETRIES: Record<'read' | 'write', number> = { read: 3, write: 2 };
 
-const inFlight = new Map<string, Promise<unknown>>();
-
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH';
   body?: unknown;
@@ -155,20 +158,15 @@ async function requestWithRetry<T>(path: string, opts: RequestOptions): Promise<
   throw lastErr;
 }
 
+/**
+ * One JSON request, with the retry policy above applied.
+ *
+ * De-duplication is *not* done here any more. Identical in-flight reads are
+ * collapsed by the TanStack Query cache, which keys them by query key and
+ * serves concurrent subscribers from a single request — and, unlike a
+ * path-keyed map here, it also decides how long a result stays reusable.
+ */
 function httpJson<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const isRead = (opts.method ?? 'GET') === 'GET' && opts.body === undefined;
-  if (isRead && opts.signal === undefined) {
-    // De-duplicate identical in-flight reads. Callers that pass a signal are
-    // asking to cancel that *specific* request, so they run their own fetch —
-    // two consumers sharing one promise cannot cancel independently.
-    const existing = inFlight.get(path);
-    if (existing) return existing as Promise<T>;
-    const promise = requestWithRetry<T>(path, opts).finally(() => {
-      if (inFlight.get(path) === promise) inFlight.delete(path);
-    });
-    inFlight.set(path, promise);
-    return promise;
-  }
   return requestWithRetry<T>(path, opts);
 }
 /* Dev instrumentation: count real requests instead of guessing. */
