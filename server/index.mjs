@@ -4,7 +4,7 @@ import {
   assets, COLLECTIONS, ALL_TAGS, ALL_OWNERS, ASSET_STATUSES, ASSET_KINDS, thumbColors,
 } from './data.mjs';
 
-const PORT = Number(process.env.PORT ?? 8788);
+const PORT = Number(process.env.PORT ?? 8787);
 const CHAOS = process.env.CHAOS !== '0';
 const LATENCY = process.env.LATENCY !== '0';
 
