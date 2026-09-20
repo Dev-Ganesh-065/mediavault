@@ -107,7 +107,11 @@ async function baseFetch(path: string, opts: RequestOptions): Promise<Response> 
   };
   if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
 
-  const res = await fetch(path, init).catch((err: unknown) => {
+  // In production, use the VITE_API_URL env var; in dev, the Vite proxy handles it.
+  const baseUrl = import.meta.env.VITE_API_URL ?? '';
+  const url = path.startsWith('/') ? `${baseUrl}${path}` : path;
+
+  const res = await fetch(url, init).catch((err: unknown) => {
     // fetch rejects with a DOMException AbortError when the caller's signal
     // fires mid-flight. Normalise it so every layer speaks one language.
     if (isAbortError(err)) throw new CancelledError();
