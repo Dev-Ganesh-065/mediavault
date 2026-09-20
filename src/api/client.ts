@@ -107,9 +107,9 @@ async function baseFetch(path: string, opts: RequestOptions): Promise<Response> 
   };
   if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
 
-  // Use runtime config from window.__MV_API_BASE_URL (set in index.html via Vercel env var)
-  // Falls back to VITE_API_URL if set at build time, or empty string for dev
-  const baseUrl = (window as unknown as Record<string, string>)['__MV_API_BASE_URL'] ?? import.meta.env.VITE_API_URL ?? '';
+  // Use VITE_API_URL defined at build time via Vite's define config
+  // Vercel passes this env var during build, Vite inlines it
+  const baseUrl = process.env.VITE_API_URL;
   const url = baseUrl ? `${baseUrl}${path}` : path;
 
   const res = await fetch(url, init).catch((err: unknown) => {
