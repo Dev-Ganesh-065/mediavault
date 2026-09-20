@@ -107,10 +107,10 @@ async function baseFetch(path: string, opts: RequestOptions): Promise<Response> 
   };
   if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
 
-  // Use VITE_API_URL from environment (set in Vercel) for production,
-  // empty string in dev so Vite proxy handles it.
-  const baseUrl = import.meta.env.VITE_API_URL ?? '';
-  const url = path.startsWith('/') ? `${baseUrl}${path}` : path;
+  // In production, use the VITE_API_URL env var set in Vercel.
+  // Vite inlines this at build time, so it must be set in Vercel's env vars.
+  const baseUrl = import.meta.env.VITE_API_URL;
+  const url = baseUrl ? `${baseUrl}${path}` : path;
 
   const res = await fetch(url, init).catch((err: unknown) => {
     // fetch rejects with a DOMException AbortError when the caller's signal
