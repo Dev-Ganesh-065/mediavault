@@ -20,12 +20,6 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
-    build: { 
-      sourcemap: true,
-      // Define global constants that get replaced at build time
-      define: {
-        'import.meta.env.VITE_API_URL': JSON.stringify(env.VITE_API_URL || ''),
-      },
-    },
+    build: { sourcemap: true },
   };
 });

@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://mediavault-backend-6v7o.onrender.com/api/:path*"
+    }
+  ]
+}
