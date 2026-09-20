@@ -1,0 +1,5 @@
+{
+  "buildCommand": "sed -i 's/window.__MV_API_BASE_URL = window.__MV_API_BASE_URL || \"\";/window.__MV_API_BASE_URL = \"${VITE_API_URL}\";/g' index.html && npm run build",
+  "outputDirectory": "dist",
+  "installCommand": "npm install"
+}
