@@ -109,7 +109,7 @@ async function baseFetch(path: string, opts: RequestOptions): Promise<Response> 
 
   // Use VITE_API_URL defined at build time via Vite's define config
   // Vercel passes this env var during build, Vite inlines it
-  const baseUrl = process.env.VITE_API_URL;
+  const baseUrl = import.meta.env.VITE_API_URL;
   const url = baseUrl ? `${baseUrl}${path}` : path;
 
   const res = await fetch(url, init).catch((err: unknown) => {
