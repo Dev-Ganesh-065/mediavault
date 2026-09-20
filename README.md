@@ -1,5 +1,7 @@
 # Switchon — Senior Frontend Assessment
 
+Deployed with VITE_API_URL env var for production backend connectivity.
+
 **MediaVault**, an internal media asset library.
 
 You have a small React app that lists media assets from an API. It works when the
